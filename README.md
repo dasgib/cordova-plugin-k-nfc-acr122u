@@ -31,8 +31,9 @@ This method should call once while platform get ready. Once it get connected, th
 
 ```
 connect(
-    callbackSuccess: (res: any) => void, 
-    callbackError: (err: any) => void
+    callbackSuccess: (res: any) => void,
+    callbackError: (err: any) => void,
+    mifareConfig: [[block_number: integer, key_a: hex-string], ...]
     ): void;
 ```
 

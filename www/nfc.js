@@ -6,8 +6,8 @@ var exec = require('cordova/exec');
  */
 function KNfcAcr122U() { }
 
-KNfcAcr122U.prototype.connect = function (successCallback, errorCallback) {
-    exec(successCallback, errorCallback, 'KNfcAcr122U', 'connect', []);
+KNfcAcr122U.prototype.connect = function (successCallback, errorCallback, blocksToRead) {
+    exec(successCallback, errorCallback, 'KNfcAcr122U', 'connect', [blocksToRead]);
 };
 
 KNfcAcr122U.prototype.disconnect = function (successCallback, errorCallback) {

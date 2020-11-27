@@ -27,6 +27,7 @@ import org.json.JSONObject;
 import java.util.Arrays;
 
 
+import java.io.*;
 
 /**
  * KNfcAcr122U android Created by Krishnendu Sekhar Das
@@ -61,6 +62,8 @@ public class KNfcAcr122U extends CordovaPlugin {
     private CallbackContext rootCallbackContext = null;
     private Boolean isDeviceAttached = false;
     private Boolean initState = false;
+
+    private JSONArray connectArgs = new JSONArray();
 
     private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
 
@@ -148,6 +151,8 @@ public class KNfcAcr122U extends CordovaPlugin {
     public boolean execute(String action, JSONArray args, CallbackContext callbackContext) throws JSONException {
         rootCallbackContext = callbackContext;
         if (action.equals("connect")) {
+            connectArgs = args;
+
             init();
             return true;
         } else if (action.equals("disconnect")) {
@@ -199,7 +204,7 @@ public class KNfcAcr122U extends CordovaPlugin {
         new CloseTask().execute(params);
     }
 
-    void buildAndSentCardInfo(byte[] data, String tagType) {
+    void buildAndSentCardInfo(byte[] data, String tagType, String blockData) {
 
         byte responseCode = data[data.length - 1];
         byte[] data4byte = Arrays.copyOf(data, 4);
@@ -237,6 +242,7 @@ public class KNfcAcr122U extends CordovaPlugin {
                 tagInfo.put("uid4byteHexReverse", uid4byteHexReverse.replaceAll("..(?!$)", "$0:"));
 
                 tagInfo.put("tagType", tagType);
+                tagInfo.put("blockData", blockData);
 
                 resObj.put("type", RES_TYPE_TAG_INFO);
                 resObj.put("message", "The operation completed successfully");
@@ -362,6 +368,94 @@ public class KNfcAcr122U extends CordovaPlugin {
         public int slotNum;
     }
 
+    public static String readBlock(Integer blockNumber, Reader mReader, Integer slotNum) {
+        String data = "";
+
+        try {
+          byte[] sendBuffer = { (byte) 0xFF, (byte) 0xB0, (byte) 0x00, (byte) blockNumber.byteValue(), (byte) 0x10 };
+          byte[] recvBuffer = new byte[16 + 2];
+          mReader.transmit(slotNum, sendBuffer, sendBuffer.length, recvBuffer, recvBuffer.length);
+
+          byte responseCode = recvBuffer[recvBuffer.length - 2];
+          if (responseCode == (byte) 0x90) {
+            for (byte b : Arrays.copyOf(recvBuffer, recvBuffer.length - 2)) {
+              String st = String.format("%02X", b);
+              data += st;
+            }
+
+          }
+
+        } catch (ReaderException e) {
+          Log.d(":: KRISH ::", e.toString());
+        }
+
+        return data;
+    }
+
+    public static boolean setKeyA(Integer blockNumber, byte[] keyA, Reader mReader, Integer slotNum) {
+      boolean response = false;
+
+      try {
+        byte[] sendBuffer = { (byte) 0xFF, (byte) 0x82, (byte) 0x00, (byte) 0x00, (byte) 0x06 };
+
+        // append key to sendBuffer
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+
+        try {
+          outputStream.write(sendBuffer);
+          outputStream.write(keyA);
+
+        } catch (IOException e) {
+          Log.d(":: KRISH ::", e.toString());
+        }
+
+        byte sendBufferWithKey[] = outputStream.toByteArray();
+
+        byte[] recvBuffer = new byte[2];
+        mReader.transmit(slotNum, sendBufferWithKey, sendBufferWithKey.length, recvBuffer, recvBuffer.length);
+
+        if (recvBuffer[0] == (byte) 0x90) {
+          response = true;
+        }
+
+      } catch (ReaderException e) {
+        Log.d(":: KRISH ::", e.toString());
+      }
+
+      return response;
+    }
+
+    public static boolean useKeyAForBlock(Integer blockNumber, Reader mReader, Integer slotNum) {
+      boolean response = false;
+
+      try {
+        byte[] sendBuffer = { (byte) 0xFF, (byte) 0x86, (byte) 0x00, (byte) 0x00, (byte) 0x05, (byte) 0x01, (byte) 0x00, (byte) blockNumber.byteValue(), (byte) 0x60, (byte) 0x00 };
+        byte[] recvBuffer = new byte[2 + 2];
+        mReader.transmit(slotNum, sendBuffer, sendBuffer.length, recvBuffer, recvBuffer.length);
+
+        if (recvBuffer[0] == (byte) 0x90) {
+          response = true;
+        }
+
+      } catch (ReaderException e) {
+        Log.d(":: KRISH ::", e.toString());
+      }
+
+      return response;
+    }
+
+    public static String readMifareBlock(Integer blockNumber, byte[] keyA, Reader mReader, Integer slotNum) {
+        String data = "";
+
+        if (setKeyA(blockNumber, keyA, mReader, slotNum)) {
+          if (useKeyAForBlock(blockNumber, mReader, slotNum)) {
+            data = readBlock(blockNumber, mReader, slotNum);
+          }
+        }
+
+        return data;
+    }
+
     private class BuildCardInfoTask extends AsyncTask<BuildCardInfoParams, Void, Void> {
 
         @Override
@@ -377,7 +471,37 @@ public class KNfcAcr122U extends CordovaPlugin {
 
                 byte[] trimmed = trimByteArray(recvBuffer);
 
-                buildAndSentCardInfo(trimmed, identifyTagType(atr));
+                String blockData = "";
+                String tagType = identifyTagType(atr);
+
+                if (tagType == MIFARE_ULTRALIGHT) {
+                    // read 9 blocks of NTAG213 data
+                    blockData += readBlock(4,  mReader, params[0].slotNum);
+                    blockData += readBlock(8,  mReader, params[0].slotNum);
+                    blockData += readBlock(12, mReader, params[0].slotNum);
+                    blockData += readBlock(16, mReader, params[0].slotNum);
+                    blockData += readBlock(20, mReader, params[0].slotNum);
+                    blockData += readBlock(24, mReader, params[0].slotNum);
+                    blockData += readBlock(28, mReader, params[0].slotNum);
+                    blockData += readBlock(32, mReader, params[0].slotNum);
+                    blockData += readBlock(36, mReader, params[0].slotNum);
+
+                } else if (tagType == MIFARE_CLASSIC_1K) {
+                    try {
+                        JSONArray blocksToRead = connectArgs.getJSONArray(0);
+                        for (int i = 0, size = blocksToRead.length(); i < size; i++) {
+                            JSONArray blockToRead = blocksToRead.getJSONArray(i);
+
+                            blockData += readMifareBlock(blockToRead.getInt(0), hexStringToByteArray(blockToRead.getString(1)), mReader, params[0].slotNum);
+                        }
+
+                    } catch (JSONException e) {
+                        Log.d(":: KRISH ::", e.toString());
+                    }
+
+                }
+
+                buildAndSentCardInfo(trimmed, tagType, blockData);
 
             } catch (ReaderException e) {
                 Log.d(":: KRISH ::", e.toString());
@@ -425,6 +549,28 @@ public class KNfcAcr122U extends CordovaPlugin {
         }
 
         return Arrays.copyOf(bytes, i + 1);
+    }
+
+    public static byte[] hexStringToByteArray(String hex) {
+        int l = hex.length();
+        byte[] data = new byte[l / 2];
+        for (int i = 0; i < l; i += 2) {
+            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
+                    + Character.digit(hex.charAt(i + 1), 16));
+        }
+        return data;
+    }
+
+    private static final char[] HEX_ARRAY = "0123456789abcdef".toCharArray();
+
+    public static String bytesToHex(byte[] bytes) {
+        char[] hexChars = new char[bytes.length * 2];
+        for (int j = 0; j < bytes.length; j++) {
+            int v = bytes[j] & 0xFF;
+            hexChars[j * 2] = HEX_ARRAY[v >>> 4];
+            hexChars[j * 2 + 1] = HEX_ARRAY[v & 0x0F];
+        }
+        return new String(hexChars);
     }
 
     void sendCallback(JSONObject obj, PluginResult.Status status, Boolean isKeepCallBack) {
